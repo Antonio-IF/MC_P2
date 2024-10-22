@@ -75,9 +75,9 @@ X_test_scaled = scaler.transform(X_test_selected)
 
 # Step 4: Define base models for stacking
 estimators = [
-    ('rf', RandomForestClassifier(n_estimators=120, max_depth=10, random_state=0)),
-    ('gb', GradientBoostingClassifier(n_estimators=100, learning_rate=0.05, max_depth=5, random_state=0)),
-    ('xgb', XGBClassifier(n_estimators=100, learning_rate=0.05, max_depth=3, eval_metric='logloss', random_state=0, use_label_encoder=False, tree_method='gpu_hist')),  # Use GPU
+    ('rf', RandomForestClassifier(n_estimators=50, max_depth=8, random_state=0)),
+    ('gb', GradientBoostingClassifier(n_estimators=50, learning_rate=0.05, max_depth=5, random_state=0)),
+    ('xgb', XGBClassifier(n_estimators=50, learning_rate=0.05, max_depth=3, eval_metric='logloss', random_state=0, use_label_encoder=False, tree_method='gpu_hist')),  # Use GPU
     ('ridge', RidgeClassifier(alpha=1.0))
 ]
 
@@ -90,8 +90,8 @@ stacking_model = StackingClassifier(
 # Step 5: Hyperparameter tuning with GridSearchCV
 param_grid_stacking = {
     'final_estimator__C': [0.1, 1],
-    'rf__n_estimators': [80, 120],
-    'rf__max_depth': [5, 10],
+    'rf__n_estimators': [25, 50],
+    'rf__max_depth': [3, 5],
     'gb__learning_rate': [0.05],
     'xgb__learning_rate': [0.05],
     'xgb__max_depth': [3]
