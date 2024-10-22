@@ -1,172 +1,172 @@
-"""
 # -- --------------------------------------------------------------------------------------------------- -- #
-# -- project: Credit Score Prediction using Stacking Model with Early Stopping and GPU                     -- #
-# -- script: model.py : python script with the model functionality including early stopping and GPU        -- #
+# -- project: Credit Score Prediction using Stacking Model with Classic Models and GPU                     -- #
+# -- script: model.py : python script with the model functionality including additional models, early stopping, and GPU -- #
 # -- author: YOUR GITHUB USER NAME                                                                         -- #
 # -- license: THE LICENSE TYPE AS STATED IN THE REPOSITORY                                                 -- #
 # -- repository: YOUR REPOSITORY URL                                                                       -- #
 # -- --------------------------------------------------------------------------------------------------- -- #
-"""
 
-import torch
+# Required libraries
 import pandas as pd
-from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.linear_model import LogisticRegression, RidgeClassifier
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, StackingClassifier
-from sklearn.feature_selection import RFE
-from sklearn.metrics import f1_score, accuracy_score, roc_auc_score, classification_report, confusion_matrix, roc_curve
-from xgboost import XGBClassifier
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import StackingClassifier, RandomForestClassifier, GradientBoostingClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+from sklearn.naive_bayes import GaussianNB
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.metrics import f1_score, accuracy_score, confusion_matrix, roc_auc_score, roc_curve, auc
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
-from lightgbm import LGBMClassifier  # Use LightGBM for faster training
 import seaborn as sns
+import torch
 
-
-# Step 1: Check GPU availability and print GPU details
+# Step 1: Check GPU availability
 if torch.cuda.is_available():
     print(f"CUDA is available. Using GPU: {torch.cuda.get_device_name(0)}")
 else:
     print("CUDA is not available. Running on CPU.")
 
-# Load dataset
+# Step 2: Load the dataset and split into train and test
 data_full = pd.read_excel('Data/clean_data.xlsx')
-
-# Split the dataset into training (75%) and testing (25%)
 train_data, test_data = train_test_split(data_full, test_size=0.25, random_state=42)
 
-# Prepare the dataset: Features and target
+# Step 3: Prepare features and target
 X_train = train_data.drop(columns=['Credit_Score'])
 y_train = train_data['Credit_Score']
 
 X_test = test_data.drop(columns=['Credit_Score'])
 y_test = test_data['Credit_Score']
 
-# Step 2: Feature Selection using RandomForest for importance-based filtering
-rf_feature_selector = RandomForestClassifier(n_estimators=100, random_state=0)
-rf_feature_selector.fit(X_train, y_train)
-
-# Get feature importances and sort them in descending order
-importances = rf_feature_selector.feature_importances_
-indices = importances.argsort()[::-1]
-
-# Print the most important features
-print("Feature ranking based on RandomForest importance:")
-for f in range(X_train.shape[1]):
-    print(f"{f + 1}. Feature {X_train.columns[indices[f]]} ({importances[indices[f]]:.4f})")
-
-# Step 3: Recursive Feature Elimination (RFE) for optimal feature set
-rfe_selector = RFE(estimator=rf_feature_selector, n_features_to_select=10, step=1)
-rfe_selector = rfe_selector.fit(X_train, y_train)
-
-# Print selected features
-selected_features = X_train.columns[rfe_selector.support_]
-print("Selected features by RFE:")
-print(selected_features)
-
-# Filter the dataset to include only the selected features
-X_train_selected = X_train[selected_features]
-X_test_selected = X_test[selected_features]
-
-# Step 4: Apply standard scaling
+# Step 4: Feature scaling
 scaler = StandardScaler()
-X_train_scaled = scaler.fit_transform(X_train_selected)
-X_test_scaled = scaler.transform(X_test_selected)
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
 
-# Step 5: Define base models for stacking with LightGBM
+# Step 5: Enhance Stacking model with more classic models
+# Base models
 estimators = [
-    ('rf', RandomForestClassifier(n_estimators=50, max_depth=8, random_state=0, n_jobs=-1)),
-    ('gb', GradientBoostingClassifier(n_estimators=50, learning_rate=0.05, max_depth=5, random_state=0)),
-    ('lgb', LGBMClassifier(n_estimators=50, learning_rate=0.05, max_depth=3, random_state=0, device='gpu')),  # Use LightGBM with GPU
-    ('ridge', RidgeClassifier(alpha=1.0))
+    ('rf', RandomForestClassifier(n_estimators=10, random_state=42)),
+    ('gb', GradientBoostingClassifier(n_estimators=10, random_state=42)),
+    ('svc', SVC(probability=True, random_state=42)),
+    ('nb', GaussianNB()),
+    ('dt', DecisionTreeClassifier(random_state=42)),
+    ('knn', KNeighborsClassifier())
 ]
 
-# Meta-model: Logistic Regression or LightGBM
+# Meta-classifier
 stacking_model = StackingClassifier(
-    estimators=estimators, 
-    final_estimator=LGBMClassifier(n_estimators=100, random_state=0, device='gpu')  # Use LightGBM as meta-model for better performance
+    estimators=estimators, final_estimator=LogisticRegression(), cv=5
 )
 
-# Step 6: Hyperparameter tuning with GridSearchCV
-param_grid_stacking = {
-    'rf__n_estimators': [25, 50],
-    'rf__max_depth': [3, 5],
-    'gb__learning_rate': [0.05],
-    'lgb__learning_rate': [0.05],
-    'lgb__max_depth': [3]
-}
+# Step 6: Train the stacking model
+stacking_model.fit(X_train_scaled, y_train)
 
-# Optimize for F1 score using 3-fold cross-validation for multiclass
-stacking_grid = GridSearchCV(stacking_model, param_grid_stacking, scoring='f1_macro', refit='f1_macro', cv=3, n_jobs=-1)
-stacking_grid.fit(X_train_scaled, y_train)
+# Step 7: Make predictions
+y_pred = stacking_model.predict(X_test_scaled)
+y_proba = stacking_model.predict_proba(X_test_scaled)
 
-# Best model from GridSearch
-best_stacking_model = stacking_grid.best_estimator_
+# Check if the target variable has multiple classes
+num_classes = len(np.unique(y_test))
 
-# Step 7: Predictions and evaluation for the stacking model
-y_pred_stacking = best_stacking_model.predict(X_test_scaled)
-f1_stacking = f1_score(y_test, y_pred_stacking, average='macro')  # Use macro for multiclass
-accuracy_stacking = accuracy_score(y_test, y_pred_stacking)
-classification_report_stacking = classification_report(y_test, y_pred_stacking)
+# Step 8: Drop AUC-ROC of different models
+roc_auc_scores = {}
+for name, model in estimators:
+    model.fit(X_train_scaled, y_train)
+    y_proba_model = model.predict_proba(X_test_scaled)
+    
+    if num_classes > 2:
+        roc_auc_scores[name] = roc_auc_score(y_test, y_proba_model, multi_class='ovr')
+    else:
+        roc_auc_scores[name] = roc_auc_score(y_test, y_proba_model[:, 1])
 
-# AUC-ROC for the stacking model
-y_probs_stacking = best_stacking_model.predict_proba(X_test_scaled)[:, 1]
-fpr_stacking, tpr_stacking, _ = roc_curve(y_test, y_probs_stacking)
-auc_stacking = roc_auc_score(y_test, y_probs_stacking)
+# Print AUC-ROC scores of different models
+print("AUC-ROC Scores for Base Models:")
+for name, score in roc_auc_scores.items():
+    print(f"{name}: {score:.4f}")
 
-# Confusion Matrix for the stacking model
-conf_matrix_stacking = confusion_matrix(y_test, y_pred_stacking)
+# AUC-ROC for the final stacking model
+if num_classes > 2:
+    roc_auc_stacking = roc_auc_score(y_test, y_proba, multi_class='ovr')
+else:
+    roc_auc_stacking = roc_auc_score(y_test, y_proba[:, 1])
 
-# Step 8: Train a simple LightGBM model for comparison
-lgb_simple = LGBMClassifier(n_estimators=100, random_state=0, device='gpu')
-lgb_simple.fit(X_train_scaled, y_train)
+print(f"AUC-ROC for Stacking Model: {roc_auc_stacking:.4f}")
 
-# Predictions and evaluation for LightGBM
-y_pred_lgb = lgb_simple.predict(X_test_scaled)
-f1_lgb = f1_score(y_test, y_pred_lgb, average='macro')
-accuracy_lgb = accuracy_score(y_test, y_pred_lgb)
-classification_report_lgb = classification_report(y_test, y_pred_lgb)
+# Step 9: Evaluate the stacking model
+accuracy = accuracy_score(y_test, y_pred)
+f1 = f1_score(y_test, y_pred, average='weighted')
 
-# AUC-ROC for LightGBM
-y_probs_lgb = lgb_simple.predict_proba(X_test_scaled)[:, 1]
-fpr_lgb, tpr_lgb, _ = roc_curve(y_test, y_probs_lgb)
-auc_lgb = roc_auc_score(y_test, y_probs_lgb)
+print(f"Accuracy: {accuracy:.4f}")
+print(f"F1 Score: {f1:.4f}")
 
-# Confusion Matrix for LightGBM
-conf_matrix_lgb = confusion_matrix(y_test, y_pred_lgb)
+# Step 10: Confusion matrix
+cm = confusion_matrix(y_test, y_pred)
+plt.figure(figsize=(8, 6))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+plt.xlabel('Predicted')
+plt.ylabel('True')
+plt.title('Confusion Matrix')
+plt.show()
 
-# Step 9: Plot ROC Curves for both models
-plt.figure(figsize=(10, 6))
-plt.plot(fpr_lgb, tpr_lgb, label=f'LightGBM (AUC = {auc_lgb:.2f})')
-plt.plot(fpr_stacking, tpr_stacking, label=f'Stacking Model (AUC = {auc_stacking:.2f})')
-plt.plot([0, 1], [0, 1], 'k--')
-plt.xlabel('False Positive Rate')
-plt.ylabel('True Positive Rate')
-plt.title('ROC Curve Comparison: LightGBM vs Stacking Model')
+# Step 11: Real vs Predicted Credit_Score comparison
+comparison_df = pd.DataFrame({'Real Credit_Score': y_test, 'Predicted Credit_Score': y_pred})
+print(comparison_df.head())
+
+# Step 12: Learning curve (loss curve and accuracy over epochs)
+train_sizes = np.linspace(0.1, 1.0, 10)
+train_scores = []
+test_scores = []
+
+for frac in train_sizes:
+    frac = float(frac)  # Convert np.float64 to standard Python float
+    X_train_frac, _, y_train_frac, _ = train_test_split(X_train_scaled, y_train, train_size=frac, random_state=42)
+    stacking_model.fit(X_train_frac, y_train_frac)
+    train_pred = stacking_model.predict(X_train_frac)
+    test_pred = stacking_model.predict(X_test_scaled)
+    train_scores.append(accuracy_score(y_train_frac, train_pred))
+    test_scores.append(accuracy_score(y_test, test_pred))
+
+plt.figure(figsize=(8, 6))
+plt.plot(train_sizes, train_scores, label='Train Accuracy', marker='o')
+plt.plot(train_sizes, test_scores, label='Test Accuracy', marker='o')
+plt.xlabel('Training set size')
+plt.ylabel('Accuracy')
+plt.title('Learning Curve')
 plt.legend()
-plt.grid(True)
 plt.show()
 
-# Step 10: Print classification reports
-print("LightGBM Classification Report:")
-print(classification_report_lgb)
+# Step 13: ROC curve for Stacking Model (for multi-class classification)
+if num_classes > 2:
+    fpr = {}
+    tpr = {}
+    roc_auc_dict = {}
 
-print("Stacking Model Classification Report:")
-print(classification_report_stacking)
+    for i in range(num_classes):
+        fpr[i], tpr[i], _ = roc_curve(y_test, y_proba[:, i], pos_label=i)
+        roc_auc_dict[i] = auc(fpr[i], tpr[i])
 
-# Step 11: Plot confusion matrices for both models
-plt.figure(figsize=(12, 5))
+    plt.figure(figsize=(8, 6))
+    for i in range(num_classes):
+        plt.plot(fpr[i], tpr[i], label=f'Class {i} (AUC = {roc_auc_dict[i]:.4f})')
 
-plt.subplot(1, 2, 1)
-sns.heatmap(conf_matrix_lgb, annot=True, fmt='d', cmap='Blues')
-plt.title('Confusion Matrix: LightGBM')
-plt.ylabel('Actual')
-plt.xlabel('Predicted')
+    plt.plot([0, 1], [0, 1], 'k--')  # Diagonal line
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('Multi-class ROC curve for Stacking Model')
+    plt.legend(loc='lower right')
+    plt.show()
 
-plt.subplot(1, 2, 2)
-sns.heatmap(conf_matrix_stacking, annot=True, fmt='d', cmap='Blues')
-plt.title('Confusion Matrix: Stacking Model')
-plt.ylabel('Actual')
-plt.xlabel('Predicted')
-
-plt.tight_layout()
-plt.show()
+else:
+    fpr, tpr, _ = roc_curve(y_test, y_proba[:, 1])
+    plt.figure(figsize=(8, 6))
+    plt.plot(fpr, tpr, color='blue', label=f'AUC-ROC = {roc_auc_stacking:.4f}')
+    plt.plot([0, 1], [0, 1], 'k--')
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('ROC Curve for Stacking Model')
+    plt.legend()
+    plt.show()
