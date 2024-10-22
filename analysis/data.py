@@ -10,23 +10,16 @@
 
 import numpy as np
 import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
-from scipy import stats
-from sklearn.preprocessing import LabelEncoder
-from functions import EDA, DQR, CSM 
+from functions import DQR
 
-
+# Cargar el dataset desde un archivo CSV
 raw_data = pd.read_csv('Data/train-2.csv', low_memory=False)
 
-raw_EDA = EDA(raw_data)
-raw_EDA.perform_EDA()
+# Limpiar los datos usando la clase DQR
+DQR_instance = DQR(raw_data)
+clean_data = DQR_instance.perform_clean()
 
-DQR = DQR(raw_data)
-clean_data = DQR.perform_clean()
+# Guardar el dataset limpio en un archivo CSV
+clean_data.to_csv('Data/clean_data.csv', index=False)
 
-clean_EDA = EDA(clean_data)
-clean_EDA.perform_EDA()
-
-accuracy = CSM(clean_data)
-accuracy.apply_scoring()
+print("Dataset limpio guardado como 'Data/clean_data.csv'.")

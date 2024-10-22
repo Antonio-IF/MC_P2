@@ -15,6 +15,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from scipy import stats
 from sklearn.preprocessing import LabelEncoder
+import os 
 
 class EDA:
     """
@@ -501,7 +502,7 @@ class DQR:
 
     def perform_clean(self):
         """
-        Executes the data cleaning process.
+        Executes the data cleaning process and saves the cleaned data to an Excel file.
         """
 
         self.preprocess_data()
@@ -514,7 +515,17 @@ class DQR:
         self.replace_negatives()
         self.postprocess_data()
 
-        return self.data    
+        # Save the cleaned data to the specified path
+        output_path = 'Data/clean_data.xlsx'
+
+        # Ensure the 'Data' directory exists
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+        self.data.to_excel(output_path, index=False)
+
+        print(f"Cleaned data saved to {output_path}")
+
+        return self.data
 
 class CSM:
 
