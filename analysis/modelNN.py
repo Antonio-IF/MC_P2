@@ -7,176 +7,167 @@
 # -- --------------------------------------------------------------------------------------------------- -- #
 
 # Required libraries
+import os
 import pickle
+import logging
 import pandas as pd
+import matplotlib.pyplot as plt
 import numpy as np
-import torch
-import torch.nn as nn
-import torch.optim as optim
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, label_binarize
-from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, roc_curve, auc, confusion_matrix
-from torch.utils.data import DataLoader, TensorDataset
-import matplotlib.pyplot as plt
-import seaborn as sns
+from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, roc_curve, confusion_matrix, ConfusionMatrixDisplay
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Dropout, BatchNormalization
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
+from tensorflow.keras.optimizers import Adam
+from kerastuner import Hyperband
+from tensorflow.keras.utils import to_categorical
 
 class CreditScoreModel:
-    def __init__(self, data_path, batch_size=64, num_epochs=50, lr=0.001):
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.data_path = data_path
-        self.batch_size = batch_size
-        self.num_epochs = num_epochs
-        self.lr = lr
-        self.scaler = StandardScaler()
+    def __init__(self, file_path):
+        self.file_path = file_path
         self.model = None
-        self.train_loader = None
-        self.test_loader = None
-        self.losses = []
+        self.X_train = None
+        self.X_test = None
+        self.y_train_cat = None
+        self.y_test_cat = None
+        self.y_test = None
 
     def load_data(self):
-        """Load and split data into training and testing sets."""
-        data_full = pd.read_excel(self.data_path)
-        train_data, test_data = train_test_split(data_full, test_size=0.25, random_state=42)
+        """Load data and split it into training and testing sets."""
+        print("Loading data...")
+        data = pd.read_excel(self.file_path)
+        limited_data = data.sample(frac=0.90, random_state=42)
+        train_data, test_data = train_test_split(limited_data, test_size=0.30, random_state=42)
+        return train_data, test_data
 
-        X_train = train_data.drop(columns=['Credit_Score'])
-        y_train = train_data['Credit_Score']
-        X_test = test_data.drop(columns=['Credit_Score'])
-        y_test = test_data['Credit_Score']
+    def preprocess_data(self, train_data, test_data):
+        """Preprocess the data by standardizing features and binarizing labels."""
+        X_train = train_data.drop(columns=["Credit_Score"])
+        y_train = train_data["Credit_Score"]
+        X_test = test_data.drop(columns=["Credit_Score"])
+        y_test = test_data["Credit_Score"]
 
-        X_train_scaled = self.scaler.fit_transform(X_train)
-        X_test_scaled = self.scaler.transform(X_test)
+        scaler = StandardScaler()
+        X_train = scaler.fit_transform(X_train)
+        X_test = scaler.transform(X_test)
 
-        X_train_tensor = torch.tensor(X_train_scaled, dtype=torch.float32).to(self.device)
-        y_train_tensor = torch.tensor(y_train.values, dtype=torch.long).to(self.device)
-        X_test_tensor = torch.tensor(X_test_scaled, dtype=torch.float32).to(self.device)
-        y_test_tensor = torch.tensor(y_test.values, dtype=torch.long).to(self.device)
+        y_train_cat = to_categorical(y_train, num_classes=3)
+        y_test_cat = to_categorical(y_test, num_classes=3)
 
-        train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
-        self.train_loader = DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True)
-
-        self.X_test_tensor = X_test_tensor
-        self.y_test_tensor = y_test_tensor
+        self.X_train, self.X_test = X_train, X_test
+        self.y_train_cat, self.y_test_cat = y_train_cat, y_test_cat
         self.y_test = y_test
 
-    def define_model(self, input_dim, output_dim):
-        """Define the model architecture."""
-        class CreditScoreNN(nn.Module):
-            def __init__(self, input_dim, output_dim):
-                super(CreditScoreNN, self).__init__()
-                self.fc1 = nn.Linear(input_dim, 128)
-                self.fc2 = nn.Linear(128, 64)
-                self.fc3 = nn.Linear(64, output_dim)
-                self.relu = nn.ReLU()
-                self.dropout = nn.Dropout(0.3)
-
-            def forward(self, x):
-                x = self.relu(self.fc1(x))
-                x = self.dropout(x)
-                x = self.relu(self.fc2(x))
-                x = self.fc3(x)
-                return x
-
-        self.model = CreditScoreNN(input_dim, output_dim).to(self.device)
-        self.criterion = nn.CrossEntropyLoss()
-        self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
-
-    def train_model(self):
-        """Train the neural network."""
-        self.model.train()
-        for epoch in range(self.num_epochs):
-            running_loss = 0.0
-            for inputs, labels in self.train_loader:
-                self.optimizer.zero_grad()
-                outputs = self.model(inputs)
-                loss = self.criterion(outputs, labels)
-                loss.backward()
-                self.optimizer.step()
-                running_loss += loss.item()
-
-            epoch_loss = running_loss / len(self.train_loader)
-            self.losses.append(epoch_loss)
-            print(f'Epoch [{epoch+1}/{self.num_epochs}], Loss: {epoch_loss:.4f}')
-
-    def evaluate_model(self):
-        """Evaluate the model and calculate AUC-ROC."""
-        self.model.eval()
-        with torch.no_grad():
-            test_outputs = self.model(self.X_test_tensor)
-            y_pred_proba = nn.functional.softmax(test_outputs, dim=1).cpu().numpy()
+    def build_tuned_model(self, hp):
+        """Build a model with tunable hyperparameters."""
+        model = Sequential()
         
-        y_test_bin = label_binarize(self.y_test, classes=[0, 1, 2])
-        fpr, tpr, roc_auc = {}, {}, {}
+        # Input layer
+        model.add(Dense(hp.Int('units_input', min_value=64, max_value=256, step=64), activation='relu', input_shape=(self.X_train.shape[1],)))
+        model.add(BatchNormalization())
+        model.add(Dropout(hp.Float('dropout_input', min_value=0.2, max_value=0.5, step=0.1)))
+        
+        # Hidden layers
+        for i in range(hp.Int('num_layers', 2, 4)):
+            model.add(Dense(hp.Int(f'units_{i}', min_value=32, max_value=128, step=32), activation='relu'))
+            model.add(BatchNormalization())
+            model.add(Dropout(hp.Float(f'dropout_{i}', min_value=0.2, max_value=0.5, step=0.1)))
 
-        for i in range(len(np.unique(self.y_test))):
-            fpr[i], tpr[i], _ = roc_curve(y_test_bin[:, i], y_pred_proba[:, i])
-            roc_auc[i] = auc(fpr[i], tpr[i])
+        # Output layer
+        model.add(Dense(3, activation='softmax'))
+        
+        model.compile(
+            optimizer=Adam(learning_rate=hp.Choice('learning_rate', values=[1e-2, 1e-3, 1e-4])),
+            loss='categorical_crossentropy',
+            metrics=['accuracy']
+        )
+        
+        return model
 
-        # Plot ROC Curve
-        plt.figure(figsize=(8, 6))
-        colors = ['blue', 'green', 'red']
-        for i, color in zip(range(len(roc_auc)), colors):
-            plt.plot(fpr[i], tpr[i], color=color, lw=2, label=f'Class {i} (AUC = {roc_auc[i]:.4f})')
-        plt.plot([0, 1], [0, 1], 'k--', lw=2)
-        plt.xlim([0.0, 1.0])
-        plt.ylim([0.0, 1.05])
-        plt.xlabel('False Positive Rate')
-        plt.ylabel('True Positive Rate')
-        plt.title('ROC Curve for Multi-class Classification')
-        plt.legend(loc='lower right')
-        plt.show()
+    def tune_model(self):
+        """Tune the model using Keras Tuner's Hyperband."""
+        tuner = Hyperband(
+            self.build_tuned_model,
+            objective='val_accuracy',
+            max_epochs=50,
+            factor=3,
+            directory='hyperband_tuning',
+            project_name='credit_score_nn_tuning'
+        )
+        
+        tuner.search(self.X_train, self.y_train_cat, epochs=50, validation_data=(self.X_test, self.y_test_cat), batch_size=32)
+        
+        self.model = tuner.get_best_models(num_models=1)[0]
+        tuner.results_summary()
 
-    def plot_loss(self):
-        """Plot the training loss over epochs."""
-        plt.figure(figsize=(8, 6))
-        plt.plot(range(1, self.num_epochs+1), self.losses, label='Training Loss', marker='o')
-        plt.xlabel('Epoch')
+    def plot_loss(self, history):
+        """Plot the loss curve."""
+        plt.plot(history.history['loss'], label='Training Loss')
+        plt.plot(history.history['val_loss'], label='Validation Loss')
+        plt.xlabel('Epochs')
         plt.ylabel('Loss')
-        plt.title('Training Loss Over Epochs')
+        plt.title('Training and Validation Loss')
         plt.legend()
         plt.show()
 
-    def save_model(self, filepath):
-        """Save the trained model to a file."""
-        torch.save(self.model.state_dict(), filepath)
-        print(f"Model saved to {filepath}")
+    def plot_roc_auc(self):
+        """Plot the AUC-ROC curve for multi-class classification."""
+        y_test_bin = label_binarize(self.y_test, classes=[0, 1, 2])
+        y_score = self.model.predict(self.X_test)
 
-    def load_model(self, filepath, input_dim, output_dim):
-        """Load a trained model from a file."""
-        self.define_model(input_dim, output_dim)
-        self.model.load_state_dict(torch.load(filepath))
-        print(f"Model loaded from {filepath}")
+        fpr = {}
+        tpr = {}
+        roc_auc = {}
 
-    def final_evaluation(self):
-        """Final evaluation on the test set."""
-        _, y_pred_tensor = torch.max(self.model(self.X_test_tensor), 1)
-        y_pred = y_pred_tensor.cpu().numpy()
+        plt.figure()
+        for i in range(y_test_bin.shape[1]):
+            fpr[i], tpr[i], _ = roc_curve(y_test_bin[:, i], y_score[:, i])
+            roc_auc[i] = roc_auc_score(y_test_bin[:, i], y_score[:, i])
+            plt.plot(fpr[i], tpr[i], label=f'Class {i} (area = {roc_auc[i]:.2f})')
 
-        accuracy = accuracy_score(self.y_test, y_pred)
-        f1 = f1_score(self.y_test, y_pred, average='weighted')
-        print(f"Accuracy: {accuracy:.4f}")
-        print(f"F1 Score: {f1:.4f}")
+        plt.plot([0, 1], [0, 1], 'k--')
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title('Receiver Operating Characteristic (ROC)')
+        plt.legend(loc="lower right")
+        plt.show()
 
-        # Confusion Matrix
+    def plot_confusion_matrix(self):
+        """Plot the confusion matrix."""
+        y_pred = np.argmax(self.model.predict(self.X_test), axis=1)
         cm = confusion_matrix(self.y_test, y_pred)
-        plt.figure(figsize=(8, 6))
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
-        plt.xlabel('Predicted')
-        plt.ylabel('True')
+        disp = ConfusionMatrixDisplay(confusion_matrix=cm)
+        disp.plot(cmap=plt.cm.Blues)
         plt.title('Confusion Matrix')
         plt.show()
 
-# Call Class 
-model = CreditScoreModel(data_path='Data/clean_data.xlsx')
-model.load_data()  # Load the data
-input_dim = model.X_test_tensor.shape[1]  # Access input dimension from loaded data
+    def evaluate_model(self):
+        """Evaluate the model and plot results."""
+        y_pred = np.argmax(self.model.predict(self.X_test), axis=1)
 
-# Define the model using input_dim
-model.define_model(input_dim=input_dim, output_dim=3)
+        accuracy = accuracy_score(self.y_test, y_pred)
+        f1 = f1_score(self.y_test, y_pred, average='weighted')
+        print(f"Model Accuracy: {accuracy}")
+        print(f"Model F1 Score: {f1}")
 
-# Train, evaluate, plot, save and load the model
-model.train_model()
-model.evaluate_model()
-model.plot_loss()
-model.save_model('credit_score_model.pth')
-model.load_model('credit_score_model.pth', input_dim=input_dim, output_dim=3)
-model.final_evaluation()
+        # Save the model
+        self.model.save('Models/NeuralNetwork_BestModel.h5')
+        print("Model saved successfully.")
+        
+        self.plot_confusion_matrix()
+        self.plot_roc_auc()
+
+        return accuracy, f1
+
+    def run(self):
+        """Run the full pipeline of data loading, preprocessing, tuning, and evaluation."""
+        train_data, test_data = self.load_data()
+        self.preprocess_data(train_data, test_data)
+        self.tune_model()
+        return self.evaluate_model()
+
+data_path = "Data/clean_data.xlsx"
+model = CreditScoreModel(data_path)
+accuracy, f1 = model.run()
+print(f"Accuracy: {accuracy}, F1 Score: {f1}")
