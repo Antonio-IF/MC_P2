@@ -26,6 +26,7 @@ from imblearn.over_sampling import SMOTE
 from tensorflow.keras.utils import to_categorical
 from tensorflow.keras import Input
 from tensorflow.keras.regularizers import l2
+import imblearn
 
 class CreditScoreModel:
     def __init__(self, file_path):
@@ -60,12 +61,14 @@ class CreditScoreModel:
         X_train_res = scaler.fit_transform(X_train_res)
         X_test = scaler.transform(X_test)
 
+        # Convert labels to categorical format (one-hot encoding)
         y_train_cat = to_categorical(y_train_res, num_classes=3)
         y_test_cat = to_categorical(y_test, num_classes=3)
 
+        # Save the processed data
         self.X_train, self.X_test = X_train_res, X_test
-        self.y_train_cat, self.y_test_cat = y_train_cat, y_test
-        self.y_test = y_test
+        self.y_train_cat, self.y_test_cat = y_train_cat, y_test_cat
+        self.y_test = y_test  # Keep original y_test for later evaluations
 
     def build_tuned_model(self, hp):
         """Build a model with tunable hyperparameters."""
@@ -108,7 +111,7 @@ class CreditScoreModel:
         # Add EarlyStopping, ReduceLROnPlateau, and ModelCheckpoint
         early_stopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
         reduce_lr = ReduceLROnPlateau(monitor='val_accuracy', factor=0.2, patience=3, min_lr=1e-6)
-        checkpoint = ModelCheckpoint('best_model.h5', monitor='val_accuracy', save_best_only=True, mode='max')
+        checkpoint = ModelCheckpoint('best_model.keras', monitor='val_accuracy', save_best_only=True, mode='max')
 
         tuner.search(self.X_train, self.y_train_cat, epochs=100, validation_data=(self.X_test, self.y_test_cat),
                      callbacks=[early_stopping, reduce_lr, checkpoint])
