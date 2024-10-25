@@ -68,7 +68,10 @@ def train_models_with_optimization(X_train, y_train):
     print("Training models with optimized hyperparameters...")
 
     # RandomForest with fewer trees
-    rf_clf = RandomForestClassifier(n_estimators=50, max_depth=5, random_state=42)
+    rf_clf = RandomForestClassifier(n_estimators=50, 
+                                    criterion="gini"
+                                    max_depth=5, 
+                                    random_state=42)
 
     # LogisticRegression with fewer iterations
     log_clf = LogisticRegression(max_iter=100, random_state=42)
