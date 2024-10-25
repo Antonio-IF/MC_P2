@@ -76,13 +76,13 @@ class CreditScoreModel:
         
         # Input Layer with tunable units and dropout
         model.add(Input(shape=(self.X_train.shape[1],)))
-        model.add(Dense(units=hp.Int('units_input', min_value=64, max_value=256, step=64), activation='relu', kernel_regularizer=l2(0.001)))
+        model.add(Dense(units=hp.Int('units_input', min_value=124, max_value=248, step=64), activation='relu', kernel_regularizer=l2(0.001)))
         model.add(BatchNormalization())
         model.add(Dropout(rate=hp.Float('dropout_input', min_value=0.2, max_value=0.5, step=0.1)))
         
         # Hidden Layers
         for i in range(hp.Int('num_layers', 2, 4)):
-            model.add(Dense(units=hp.Int(f'units_{i}', min_value=32, max_value=128, step=32), activation='relu', kernel_regularizer=l2(0.001)))
+            model.add(Dense(units=hp.Int(f'units_{i}', min_value=32, max_value=64, step=32), activation='relu', kernel_regularizer=l2(0.001)))
             model.add(BatchNormalization())
             model.add(Dropout(rate=hp.Float(f'dropout_{i}', min_value=0.2, max_value=0.5, step=0.1)))
 
@@ -102,18 +102,18 @@ class CreditScoreModel:
         tuner = Hyperband(
             self.build_tuned_model,
             objective='val_accuracy',
-            max_epochs=50,  # Max number of epochs
+            max_epochs=75,  # Max number of epochs
             factor=3,  # Reduction factor for epochs after each round
             directory='hyperband_tuning',
             project_name='credit_score_tuning'
         )
         
         # Add EarlyStopping, ReduceLROnPlateau, and ModelCheckpoint
-        early_stopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+        early_stopping = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
         reduce_lr = ReduceLROnPlateau(monitor='val_accuracy', factor=0.2, patience=3, min_lr=1e-6)
         checkpoint = ModelCheckpoint('best_model.keras', monitor='val_accuracy', save_best_only=True, mode='max')
 
-        tuner.search(self.X_train, self.y_train_cat, epochs=100, validation_data=(self.X_test, self.y_test_cat),
+        tuner.search(self.X_train, self.y_train_cat, epochs=250, validation_data=(self.X_test, self.y_test_cat),
                      callbacks=[early_stopping, reduce_lr, checkpoint])
 
         self.model = tuner.get_best_models(num_models=1)[0]
