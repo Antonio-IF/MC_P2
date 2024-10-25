@@ -16,14 +16,16 @@ import matplotlib.pyplot as plt
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Dropout, BatchNormalization, LeakyReLU
-from tensorflow.keras.optimizers import Adam, AdamW
-from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
+from tensorflow.keras.optimizers import Adam, AdamW, Nadam
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
 from keras_tuner import Hyperband
 from sklearn.model_selection import train_test_split, KFold
 from sklearn.preprocessing import StandardScaler, label_binarize
-from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, roc_curve, confusion_matrix, ConfusionMatrixDisplay
+from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, roc_curve, confusion_matrix, ConfusionMatrixDisplay, classification_report
+from imblearn.over_sampling import SMOTE
 from tensorflow.keras.utils import to_categorical
 from tensorflow.keras import Input
+from tensorflow.keras.regularizers import l2
 
 class CreditScoreModel:
     def __init__(self, file_path):
@@ -44,21 +46,25 @@ class CreditScoreModel:
         return train_data, test_data
 
     def preprocess_data(self, train_data, test_data):
-        """Preprocess the data by standardizing features and binarizing labels."""
+        """Preprocess the data by standardizing features and binarizing labels, handling class imbalance with SMOTE."""
         X_train = train_data.drop(columns=["Credit_Score"])
         y_train = train_data["Credit_Score"]
         X_test = test_data.drop(columns=["Credit_Score"])
         y_test = test_data["Credit_Score"]
 
+        # Apply SMOTE to balance the classes in the training set
+        smote = SMOTE()
+        X_train_res, y_train_res = smote.fit_resample(X_train, y_train)
+
         scaler = StandardScaler()
-        X_train = scaler.fit_transform(X_train)
+        X_train_res = scaler.fit_transform(X_train_res)
         X_test = scaler.transform(X_test)
 
-        y_train_cat = to_categorical(y_train, num_classes=3)
+        y_train_cat = to_categorical(y_train_res, num_classes=3)
         y_test_cat = to_categorical(y_test, num_classes=3)
 
-        self.X_train, self.X_test = X_train, X_test
-        self.y_train_cat, self.y_test_cat = y_train_cat, y_test_cat
+        self.X_train, self.X_test = X_train_res, X_test
+        self.y_train_cat, self.y_test_cat = y_train_cat, y_test
         self.y_test = y_test
 
     def build_tuned_model(self, hp):
@@ -67,13 +73,13 @@ class CreditScoreModel:
         
         # Input Layer with tunable units and dropout
         model.add(Input(shape=(self.X_train.shape[1],)))
-        model.add(Dense(units=hp.Int('units_input', min_value=64, max_value=256, step=64), activation='relu'))
+        model.add(Dense(units=hp.Int('units_input', min_value=64, max_value=256, step=64), activation='relu', kernel_regularizer=l2(0.001)))
         model.add(BatchNormalization())
         model.add(Dropout(rate=hp.Float('dropout_input', min_value=0.2, max_value=0.5, step=0.1)))
         
         # Hidden Layers
         for i in range(hp.Int('num_layers', 2, 4)):
-            model.add(Dense(units=hp.Int(f'units_{i}', min_value=32, max_value=128, step=32), activation='relu'))
+            model.add(Dense(units=hp.Int(f'units_{i}', min_value=32, max_value=128, step=32), activation='relu', kernel_regularizer=l2(0.001)))
             model.add(BatchNormalization())
             model.add(Dropout(rate=hp.Float(f'dropout_{i}', min_value=0.2, max_value=0.5, step=0.1)))
 
@@ -99,12 +105,13 @@ class CreditScoreModel:
             project_name='credit_score_tuning'
         )
         
-        # Add EarlyStopping and ReduceLROnPlateau
+        # Add EarlyStopping, ReduceLROnPlateau, and ModelCheckpoint
         early_stopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
         reduce_lr = ReduceLROnPlateau(monitor='val_accuracy', factor=0.2, patience=3, min_lr=1e-6)
+        checkpoint = ModelCheckpoint('best_model.h5', monitor='val_accuracy', save_best_only=True, mode='max')
 
         tuner.search(self.X_train, self.y_train_cat, epochs=100, validation_data=(self.X_test, self.y_test_cat),
-                     callbacks=[early_stopping, reduce_lr])
+                     callbacks=[early_stopping, reduce_lr, checkpoint])
 
         self.model = tuner.get_best_models(num_models=1)[0]
         tuner.results_summary()
@@ -159,6 +166,8 @@ class CreditScoreModel:
         print(f"Model Accuracy: {accuracy}")
         print(f"Model F1 Score: {f1}")
 
+        print(classification_report(self.y_test, y_pred))  # Detailed report for precision, recall, F1
+
         # Save the model
         self.model.save('Models/NeuralNetwork_BestModel.h5')
         print("Model saved successfully.")
@@ -174,6 +183,7 @@ class CreditScoreModel:
         self.preprocess_data(train_data, test_data)
         self.tune_model()
         return self.evaluate_model()
+
 
 data_path = "Data/clean_data.xlsx"
 model = CreditScoreModel(data_path)
