@@ -11,18 +11,19 @@ import os
 import pickle
 import logging
 import pandas as pd
-import matplotlib.pyplot as plt
 import numpy as np
+import matplotlib.pyplot as plt
 import tensorflow as tf
-from sklearn.model_selection import train_test_split
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Dropout, BatchNormalization, LeakyReLU
+from tensorflow.keras.optimizers import Adam, AdamW
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
+from keras_tuner import Hyperband
+from sklearn.model_selection import train_test_split, KFold
 from sklearn.preprocessing import StandardScaler, label_binarize
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, roc_curve, confusion_matrix, ConfusionMatrixDisplay
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Dropout, BatchNormalization
-from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
-from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.utils import to_categorical
-from keras_tuner import Hyperband
+from tensorflow.keras import Input
 
 class CreditScoreModel:
     def __init__(self, file_path):
@@ -64,22 +65,23 @@ class CreditScoreModel:
         """Build a model with tunable hyperparameters."""
         model = Sequential()
         
-        # Input layer
-        model.add(Dense(hp.Int('units_input', min_value=64, max_value=256, step=64), activation='relu', input_shape=(self.X_train.shape[1],)))
+        # Input Layer with tunable units and dropout
+        model.add(Input(shape=(self.X_train.shape[1],)))
+        model.add(Dense(units=hp.Int('units_input', min_value=64, max_value=256, step=64), activation='relu'))
         model.add(BatchNormalization())
-        model.add(Dropout(hp.Float('dropout_input', min_value=0.2, max_value=0.5, step=0.1)))
+        model.add(Dropout(rate=hp.Float('dropout_input', min_value=0.2, max_value=0.5, step=0.1)))
         
-        # Hidden layers
+        # Hidden Layers
         for i in range(hp.Int('num_layers', 2, 4)):
-            model.add(Dense(hp.Int(f'units_{i}', min_value=32, max_value=128, step=32), activation='relu'))
+            model.add(Dense(units=hp.Int(f'units_{i}', min_value=32, max_value=128, step=32), activation='relu'))
             model.add(BatchNormalization())
-            model.add(Dropout(hp.Float(f'dropout_{i}', min_value=0.2, max_value=0.5, step=0.1)))
+            model.add(Dropout(rate=hp.Float(f'dropout_{i}', min_value=0.2, max_value=0.5, step=0.1)))
 
-        # Output layer
+        # Output Layer
         model.add(Dense(3, activation='softmax'))
         
         model.compile(
-            optimizer=Adam(learning_rate=hp.Choice('learning_rate', values=[1e-2, 1e-3, 1e-4])),
+            optimizer=AdamW(learning_rate=hp.Choice('learning_rate', values=[1e-2, 1e-3, 1e-4])),
             loss='categorical_crossentropy',
             metrics=['accuracy']
         )
@@ -91,14 +93,19 @@ class CreditScoreModel:
         tuner = Hyperband(
             self.build_tuned_model,
             objective='val_accuracy',
-            max_epochs=50,
-            factor=3,
+            max_epochs=50,  # Max number of epochs
+            factor=3,  # Reduction factor for epochs after each round
             directory='hyperband_tuning',
-            project_name='credit_score_nn_tuning'
+            project_name='credit_score_tuning'
         )
         
-        tuner.search(self.X_train, self.y_train_cat, epochs=50, validation_data=(self.X_test, self.y_test_cat), batch_size=32)
-        
+        # Add EarlyStopping and ReduceLROnPlateau
+        early_stopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+        reduce_lr = ReduceLROnPlateau(monitor='val_accuracy', factor=0.2, patience=3, min_lr=1e-6)
+
+        tuner.search(self.X_train, self.y_train_cat, epochs=100, validation_data=(self.X_test, self.y_test_cat),
+                     callbacks=[early_stopping, reduce_lr])
+
         self.model = tuner.get_best_models(num_models=1)[0]
         tuner.results_summary()
 
